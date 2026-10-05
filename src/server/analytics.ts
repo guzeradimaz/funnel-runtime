@@ -17,6 +17,8 @@ export interface Filters {
   funnelId: string;
   version?: number | null;
   campaign?: string | null;
+  /** Include QA sessions with a forced variant. Off by default: they are not randomized. */
+  includeQa?: boolean;
 }
 
 interface SessionAgg {
@@ -30,6 +32,7 @@ interface SessionAgg {
   resultIds: Set<string>;
   cta: boolean;
   extra: Set<string>; // other event names (e.g. recommendation_expanded)
+  transitions: Set<string>; // `${step}>${next_step_id}` from step_completed
 }
 
 export interface Rates {
@@ -94,15 +97,19 @@ export function computeAnalytics(db: DB, f: Filters) {
   }[];
 
   const sessions = new Map<string, SessionAgg>();
+  // Data-quality counters follow the version filter, like every metric shown next to them.
+  const inSelection = (v: number) => !f.version || v === f.version;
   let repeatedViews = 0;
+  let selectedEvents = 0;
   const viewCounts = new Map<string, number>();
   // QA sessions with a forced variant (?variant=) are not randomized: they would bias the A/B comparison.
   const qaSessions = new Set<string>();
   for (const r of rows) {
-    if (r.variant_source === 'override') {
-      qaSessions.add(r.session_id);
+    if (r.variant_source === 'override' && !f.includeQa) {
+      if (inSelection(r.funnel_version)) qaSessions.add(r.session_id);
       continue;
     }
+    if (inSelection(r.funnel_version)) selectedEvents++;
     let s = sessions.get(r.session_id);
     if (!s) {
       s = {
@@ -116,6 +123,7 @@ export function computeAnalytics(db: DB, f: Filters) {
         resultIds: new Set(),
         cta: false,
         extra: new Set(),
+        transitions: new Set(),
       };
       sessions.set(r.session_id, s);
     }
@@ -128,7 +136,7 @@ export function computeAnalytics(db: DB, f: Filters) {
         const k = `${r.session_id}|${r.step_id}`;
         const n = (viewCounts.get(k) ?? 0) + 1;
         viewCounts.set(k, n);
-        if (n > 1) repeatedViews++;
+        if (n > 1 && inSelection(r.funnel_version)) repeatedViews++;
         break;
       }
       case 'answer_submitted':
@@ -138,6 +146,8 @@ export function computeAnalytics(db: DB, f: Filters) {
         if (r.step_id) {
           s.viewed.add(r.step_id);
           s.completed.add(r.step_id);
+          const next = (JSON.parse(r.properties_json) as { next_step_id?: string }).next_step_id;
+          if (next) s.transitions.add(`${r.step_id}>${next}`);
         }
         break;
       case 'back_clicked':
@@ -208,7 +218,7 @@ export function computeAnalytics(db: DB, f: Filters) {
     filters: f,
     campaigns,
     versionsWithData,
-    totals: { ...rates(selected), sessions: selected.length, events: rows.length, repeatedViews, qaSessionsExcluded: qaSessions.size },
+    totals: { ...rates(selected), sessions: selected.length, events: selectedEvents, repeatedViews, qaSessionsExcluded: qaSessions.size },
     variants,
     abTest,
     versions: versionRows,
@@ -237,6 +247,16 @@ function stepFunnel(db: DB, funnelId: string, version: number, variant: string, 
     const viewed = isResult ? started.filter((s) => s.result).length : started.filter((s) => s.viewed.has(id)).length;
     const completed = isResult ? viewed : started.filter((s) => s.completed.has(id)).length;
     const drop = dropAt.get(id) ?? 0;
+    // Conversion between steps, split by branch: share of sessions that saw this step and moved on to each next step.
+    const nextCounts = new Map<string, number>();
+    for (const s of started)
+      for (const t of s.transitions) {
+        const [from, to] = t.split('>');
+        if (from === id) nextCounts.set(to, (nextCounts.get(to) ?? 0) + 1);
+      }
+    const next = [...nextCounts]
+      .sort((a, b) => b[1] - a[1])
+      .map(([stepId, sessions]) => ({ stepId, sessions, rate: ratio(sessions, viewed) }));
     return {
       stepId: id,
       type: step.type,
@@ -247,6 +267,7 @@ function stepFunnel(db: DB, funnelId: string, version: number, variant: string, 
       stepConversion: isResult ? null : ratio(completed, viewed),
       dropOff: drop,
       dropRate: ratio(drop, viewed),
+      next,
     };
   });
   return { started: n, noStepViewed, rows };

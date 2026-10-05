@@ -201,7 +201,7 @@ export async function generate(c: Client, opts: { sessions: number; seed: number
     const camp = r.pick(CAMPAIGNS);
     const { quality, ...utm } = camp;
     const override = r.chance(opts.overrideShare ?? 0.05) ? r.pick(['A', 'B']) : undefined;
-    const view = await http(c, 'POST', '/api/sessions', { utm, variant: override });
+    const view = await http(c, 'POST', '/api/sessions', { utm, variant: override, clientTs: new Date(t0 + i * 60_000).toISOString() });
     const plan = simulate(r, view, quality, utm.utm_campaign ?? '(none)', t0 + i * 60_000);
     await deliver(c, r, plan, stats);
     plans.push(plan);

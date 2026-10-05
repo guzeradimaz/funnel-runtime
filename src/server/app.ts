@@ -102,7 +102,8 @@ export function createApp(db: DB, opts: { adminToken?: string; staticDir?: strin
     if (!funnelId) throw new HttpError(404, 'No funnels');
     const version = req.query.version ? Number(req.query.version) : null;
     const campaign = (req.query.campaign as string) || null;
-    res.json(computeAnalytics(db, { funnelId, version, campaign }));
+    const includeQa = req.query.includeQa === '1';
+    res.json(computeAnalytics(db, { funnelId, version, campaign, includeQa }));
   });
 
   app.use('/api', api);

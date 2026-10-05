@@ -193,4 +193,51 @@ describe('zTest', () => {
     expect(a.totals.started).toBe(1);
     expect(a.totals.qaSessionsExcluded).toBe(1);
   });
+
+  it('can include QA sessions on request', () => {
+    const db = setupDb([1]);
+    createSession(db, { funnelId: FUNNEL_ID, variantOverride: 'B' });
+    const a = computeAnalytics(db, { funnelId: FUNNEL_ID, version: 1, includeQa: true });
+    expect(a.totals.started).toBe(1);
+    expect(a.totals.qaSessionsExcluded).toBe(0);
+  });
+
+  it('scopes data-quality counters to the selected version', () => {
+    const db = setupDb([1, 2]);
+    const s1 = createSession(db, { funnelId: FUNNEL_ID });
+    publish(db, FUNNEL_ID, 2);
+    createSession(db, { funnelId: FUNNEL_ID });
+    ingestEvents(db, [
+      { event_id: eid(), session_id: s1.sessionId, name: 'step_viewed', step_id: 'intro' },
+      { event_id: eid(), session_id: s1.sessionId, name: 'step_viewed', step_id: 'intro' },
+    ]);
+    const v1 = computeAnalytics(db, { funnelId: FUNNEL_ID, version: 1 });
+    const v2 = computeAnalytics(db, { funnelId: FUNNEL_ID, version: 2 });
+    expect(v1.totals.events).toBe(3); // session_started + 2 views
+    expect(v1.totals.repeatedViews).toBe(1);
+    expect(v2.totals.events).toBe(1);
+    expect(v2.totals.repeatedViews).toBe(0);
+  });
+
+  it('splits conversion between steps by branch', () => {
+    const db = setupDb([1]);
+    const mk = (next: string) => {
+      const s = createSession(db, { funnelId: FUNNEL_ID, variantOverride: 'A' });
+      db.prepare("UPDATE sessions SET variant_source = 'hash' WHERE id = ?").run(s.sessionId);
+      ingestEvents(db, [
+        { event_id: eid(), session_id: s.sessionId, name: 'step_viewed', step_id: 'timezone_span' },
+        { event_id: eid(), session_id: s.sessionId, name: 'step_completed', step_id: 'timezone_span', properties: { next_step_id: next } },
+      ]);
+    };
+    mk('office_days');
+    mk('office_days');
+    mk('async_maturity');
+    const row = computeAnalytics(db, { funnelId: FUNNEL_ID, version: 1 })
+      .variants[0].steps!.rows.find((r) => r.stepId === 'timezone_span')!;
+    expect(row.stepConversion).toBe(1);
+    expect(row.next).toEqual([
+      { stepId: 'office_days', sessions: 2, rate: 2 / 3 },
+      { stepId: 'async_maturity', sessions: 1, rate: 1 / 3 },
+    ]);
+  });
 });

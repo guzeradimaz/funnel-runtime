@@ -2,7 +2,7 @@
 //   v1 traffic -> publish v2 -> traffic -> upload+publish v3 (iteration 2) -> old sessions continue -> rollback to v2.
 // npm run demo -- [--base http://localhost:3000] [--sessions 120]
 import fs from 'node:fs';
-import { firstStepId, nextStepId } from '../src/shared/engine';
+import { firstStepId, nextStepId, resolveResultId } from '../src/shared/engine';
 import { generate, http, snapshot, verify, type Client, type Expected } from './lib/traffic';
 
 function arg(name: string, fallback: string) {
@@ -37,13 +37,13 @@ async function run(seed: number) {
 async function startPending(n: number) {
   const out = [];
   for (let i = 0; i < n; i++) {
-    const v = await http(c, 'POST', '/api/sessions', { utm: { utm_source: 'demo', utm_campaign: 'pending_users' } });
+    const v = await http(c, 'POST', '/api/sessions', { utm: { utm_source: 'demo', utm_campaign: 'pending_users' }, clientTs: new Date().toISOString() });
     const first = firstStepId(v.funnel);
     const second = nextStepId(v.funnel, first, {})!;
     await http(c, 'POST', '/api/events', {
       events: [
-        { event_id: `demo-${v.sessionId}-1`, session_id: v.sessionId, name: 'step_viewed', step_id: first, properties: {} },
-        { event_id: `demo-${v.sessionId}-2`, session_id: v.sessionId, name: 'step_completed', step_id: first, properties: { next_step_id: second } },
+        { event_id: `demo-${v.sessionId}-1`, session_id: v.sessionId, client_ts: new Date().toISOString(), name: 'step_viewed', step_id: first, properties: { step_type: v.funnel.steps[first].type } },
+        { event_id: `demo-${v.sessionId}-2`, session_id: v.sessionId, client_ts: new Date().toISOString(), name: 'step_completed', step_id: first, properties: { next_step_id: second } },
       ],
     });
     await http(c, 'PUT', `/api/sessions/${v.sessionId}/state`, { state: { answers: {}, history: [first, second], rev: 1 } });
@@ -55,6 +55,7 @@ async function startPending(n: number) {
 /** Continues pending sessions: re-reads them from the server, checks the pinned version, walks to the result. */
 async function finishPending(ids: string[], expectVersion: number) {
   let ok = 0;
+  const before = await snapshot(c);
   for (const id of ids) {
     const v = await http(c, 'GET', `/api/sessions/${id}`);
     if (v.version !== expectVersion) throw new Error(`session ${id} moved to v${v.version}`);
@@ -65,20 +66,29 @@ async function finishPending(ids: string[], expectVersion: number) {
     let n = 3;
     while (f.steps[cur].type !== 'result') {
       const s = f.steps[cur];
-      events.push({ event_id: `demo-${id}-${n++}`, session_id: id, name: 'step_viewed', step_id: cur, properties: {} });
+      events.push({ event_id: `demo-${id}-${n++}`, session_id: id, client_ts: new Date().toISOString(), name: 'step_viewed', step_id: cur, properties: { step_type: s.type } });
       if (s.input) {
         answers[s.input.name] = s.type === 'number' ? s.input.min ?? 1 : s.type === 'multi-select' ? [s.input.options[0].value] : s.input.options[0].value;
       }
       const next = nextStepId(f, cur, answers as never)!;
-      events.push({ event_id: `demo-${id}-${n++}`, session_id: id, name: 'step_completed', step_id: cur, properties: { next_step_id: next } });
+      events.push({ event_id: `demo-${id}-${n++}`, session_id: id, client_ts: new Date().toISOString(), name: 'step_completed', step_id: cur, properties: { next_step_id: next } });
       cur = next;
     }
-    events.push({ event_id: `demo-${id}-${n++}`, session_id: id, name: 'result_viewed', step_id: cur, properties: { result_id: f.defaultResultId } });
+    events.push({ event_id: `demo-${id}-${n++}`, session_id: id, client_ts: new Date().toISOString(), name: 'result_viewed', step_id: cur, properties: { result_id: resolveResultId(f, answers as never) } });
     const res = await http(c, 'POST', '/api/events', { events });
     if (res.rejected === 0) ok++;
   }
   console.log(`${ok}/${ids.length} old v${expectVersion} sessions finished on v${expectVersion} without rejected events`);
   allOk &&= ok === ids.length;
+  // Dashboard check: these sessions were already counted as started; now each must add one result on its own version.
+  const after = await snapshot(c);
+  const sum = (m: Map<string, Expected>, key: keyof Expected) =>
+    [...m].filter(([k]) => k.startsWith(`${expectVersion}|`)).reduce((s, [, e]) => s + e[key], 0);
+  const dStarted = sum(after, 'started') - sum(before, 'started');
+  const dResult = sum(after, 'reachedResult') - sum(before, 'reachedResult');
+  const match = dStarted === 0 && dResult === ids.length;
+  console.log(`  v${expectVersion} dashboard delta: started +${dStarted}, result +${dResult} ${match ? 'OK' : 'MISMATCH'}`);
+  allOk &&= match;
 }
 
 step('Iteration 1: v1 is live');
@@ -88,7 +98,7 @@ const pendingV1 = await startPending(5);
 
 step('Publish v2 without redeploy');
 await ensureActive(2);
-const fresh = await http(c, 'POST', '/api/sessions', {});
+const fresh = await http(c, 'POST', '/api/sessions', { clientTs: new Date().toISOString() });
 console.log(`new session starts on v${fresh.version}`);
 allOk &&= fresh.version === 2;
 await finishPending(pendingV1, 1);
@@ -110,7 +120,7 @@ const pendingV3 = await startPending(5);
 step('Rollback v3 -> v2');
 const rb = await http(c, 'POST', `/api/admin/funnels/${FUNNEL}/rollback`);
 console.log(`rolled back v${rb.previous} -> v${rb.version}`);
-const afterRb = await http(c, 'POST', '/api/sessions', {});
+const afterRb = await http(c, 'POST', '/api/sessions', { clientTs: new Date().toISOString() });
 console.log(`new session after rollback starts on v${afterRb.version}`);
 allOk &&= afterRb.version === 2;
 await finishPending(pendingV3, 3);

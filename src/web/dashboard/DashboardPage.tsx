@@ -21,6 +21,7 @@ interface StepRow {
   stepConversion: number | null;
   dropOff: number;
   dropRate: number;
+  next: { stepId: string; sessions: number; rate: number }[];
 }
 
 interface Analytics {
@@ -44,6 +45,7 @@ export function DashboardPage() {
   const params = new URLSearchParams(location.search);
   const [version, setVersion] = useState<string>(params.get('version') ?? '');
   const [campaign, setCampaign] = useState<string>(params.get('campaign') ?? '');
+  const [includeQa, setIncludeQa] = useState(params.get('includeQa') === '1');
   const [data, setData] = useState<Analytics | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [activeVersion, setActiveVersion] = useState<number | null>(null);
@@ -65,12 +67,13 @@ export function DashboardPage() {
       const q = new URLSearchParams();
       if (v && v !== 'all') q.set('version', v);
       if (campaign) q.set('campaign', campaign);
+      if (includeQa) q.set('includeQa', '1');
       setData(await api<Analytics>(`/api/admin/analytics?${q}`));
-      history.replaceState(null, '', `?${new URLSearchParams({ version: v, ...(campaign ? { campaign } : {}) })}`);
+      history.replaceState(null, '', `?${new URLSearchParams({ version: v, ...(campaign ? { campaign } : {}), ...(includeQa ? { includeQa: '1' } : {}) })}`);
     } catch (e) {
       setError(e as ApiError);
     }
-  }, [version, campaign, activeVersion]);
+  }, [version, campaign, includeQa, activeVersion]);
 
   useEffect(() => {
     void load();
@@ -105,6 +108,10 @@ export function DashboardPage() {
                 </option>
               ))}
             </select>
+          </label>
+          <label className="row gap small" title="Сессии, открытые с ?variant=. Они не рандомизированы, поэтому по умолчанию исключены из A/B.">
+            <input type="checkbox" checked={includeQa} onChange={(e) => setIncludeQa(e.target.checked)} />
+            QA-сессии (?variant=)
           </label>
           <button className="btn" onClick={() => void load()}>
             Обновить
@@ -267,7 +274,7 @@ function StepTable({ steps, reached }: { steps: NonNullable<Analytics['variants'
           <tr>
             <th>Шаг</th>
             <th className="num">Видели</th>
-            <th className="num">Конверсия шага</th>
+            <th className="num">Переход дальше</th>
             <th className="num">Отвал</th>
           </tr>
         </thead>
@@ -286,7 +293,15 @@ function StepTable({ steps, reached }: { steps: NonNullable<Analytics['variants'
               <td className="num">
                 {r.viewed} <span className="muted small">{pct(r.reachRate, 0)}</span>
               </td>
-              <td className="num">{pct(r.stepConversion)}</td>
+              <td className="num">
+                {pct(r.stepConversion)}
+                {r.next.length > 1 &&
+                  r.next.map((n) => (
+                    <div key={n.stepId} className="muted small">
+                      → {n.stepId} {pct(n.rate, 0)}
+                    </div>
+                  ))}
+              </td>
               <td className="num">
                 {r.type === 'result' ? '—' : r.dropOff}{' '}
                 {r.type !== 'result' && <span className="muted small">{pct(r.dropRate, 0)}</span>}
