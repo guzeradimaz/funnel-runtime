@@ -33,9 +33,9 @@ export function ingestEvents(db: DB, events: IncomingEvent[], now = new Date()):
   const serverTs = now.toISOString();
   const insert = db.prepare(
     `INSERT OR IGNORE INTO events (event_id, session_id, name, funnel_id, funnel_version, experiment_id, variant,
-       step_id, utm_source, utm_medium, utm_campaign, client_ts, server_ts, properties_json)
+       step_id, utm_source, utm_medium, utm_campaign, utm_content, utm_term, client_ts, server_ts, properties_json)
      VALUES (@event_id, @session_id, @name, @funnel_id, @funnel_version, @experiment_id, @variant,
-       @step_id, @utm_source, @utm_medium, @utm_campaign, @client_ts, @server_ts, @properties_json)`,
+       @step_id, @utm_source, @utm_medium, @utm_campaign, @utm_content, @utm_term, @client_ts, @server_ts, @properties_json)`,
   );
   const getSession = db.prepare('SELECT * FROM sessions WHERE id = ?');
   const sessions = new Map<string, SessionRow | undefined>();
@@ -94,6 +94,8 @@ export function ingestEvents(db: DB, events: IncomingEvent[], now = new Date()):
       utm_source: session.utm_source,
       utm_medium: session.utm_medium,
       utm_campaign: session.utm_campaign,
+      utm_content: session.utm_content,
+      utm_term: session.utm_term,
       client_ts: clientTs,
       server_ts: serverTs,
       properties_json: JSON.stringify(props),

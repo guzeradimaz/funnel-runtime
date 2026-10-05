@@ -84,12 +84,14 @@ export function createApp(db: DB, opts: { adminToken?: string; staticDir?: strin
   // Upload a new config (stored as draft). `?publish=1` also activates it.
   api.post('/admin/versions', admin, (req, res) => {
     const stored = storeVersion(db, req.body);
-    const published = req.query.publish ? publish(db, stored.funnelId, stored.version) : null;
+    const published = req.query.publish === '1' ? publish(db, stored.funnelId, stored.version) : null;
     res.status(stored.created ? 201 : 200).json({ ...stored, published });
   });
 
   api.post('/admin/funnels/:funnelId/publish', admin, (req, res) => {
-    res.json(publish(db, req.params.funnelId as string, Number(req.body?.version)));
+    const version = Number(req.body?.version);
+    if (!Number.isInteger(version) || version < 1) throw new HttpError(400, 'Body must be { "version": <positive integer> }');
+    res.json(publish(db, req.params.funnelId as string, version));
   });
 
   api.post('/admin/funnels/:funnelId/rollback', admin, (req, res) => {

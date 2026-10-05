@@ -103,4 +103,14 @@ describe('publish and rollback', () => {
     expect((await request(app).post(`/api/admin/funnels/${FUNNEL_ID}/publish`).send({ version: 1 })).status).toBe(409);
     expect((await request(app).post(`/api/admin/funnels/${FUNNEL_ID}/publish`).send({ version: 42 })).status).toBe(404);
   });
+
+  it('validates publish input over HTTP', async () => {
+    const db = setupDb([1]);
+    const app = createApp(db);
+    const noVersion = await request(app).post(`/api/admin/funnels/${FUNNEL_ID}/publish`).send({});
+    expect(noVersion.status).toBe(400);
+    const draft = await request(app).post('/api/admin/versions?publish=0').send(loadConfig(2));
+    expect(draft.body.published).toBeNull();
+    expect(getActiveVersion(db, FUNNEL_ID)).toBe(1);
+  });
 });

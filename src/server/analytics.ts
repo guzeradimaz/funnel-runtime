@@ -32,7 +32,9 @@ interface SessionAgg {
   resultIds: Set<string>;
   cta: boolean;
   extra: Set<string>; // other event names (e.g. recommendation_expanded)
-  transitions: Set<string>; // `${step}>${next_step_id}` from step_completed
+  // step -> where the session went from it. If the user came back and changed the branch, the latest
+  // step_completed wins (client time, falling back to server time), so branch shares never exceed 100%.
+  transitions: Map<string, { next: string; ts: string }>;
 }
 
 export interface Rates {
@@ -82,12 +84,14 @@ export function computeAnalytics(db: DB, f: Filters) {
   if (f.campaign) where.push(f.campaign === '(none)' ? 'utm_campaign IS NULL' : 'utm_campaign = @campaign');
   const rows = db
     .prepare(
-      `SELECT e.session_id, e.name, e.funnel_version, e.variant, e.step_id, e.properties_json, s.variant_source
+      `SELECT e.session_id, e.name, e.funnel_version, e.variant, e.step_id, e.properties_json, e.client_ts, e.server_ts, s.variant_source
        FROM events e JOIN sessions s ON s.id = e.session_id
        WHERE ${where.map((w) => `e.${w}`).join(' AND ')}`,
     )
     .all({ funnelId: f.funnelId, campaign: f.campaign }) as {
     variant_source: string;
+    client_ts: string | null;
+    server_ts: string;
     session_id: string;
     name: string;
     funnel_version: number;
@@ -123,7 +127,7 @@ export function computeAnalytics(db: DB, f: Filters) {
         resultIds: new Set(),
         cta: false,
         extra: new Set(),
-        transitions: new Set(),
+        transitions: new Map(),
       };
       sessions.set(r.session_id, s);
     }
@@ -147,7 +151,9 @@ export function computeAnalytics(db: DB, f: Filters) {
           s.viewed.add(r.step_id);
           s.completed.add(r.step_id);
           const next = (JSON.parse(r.properties_json) as { next_step_id?: string }).next_step_id;
-          if (next) s.transitions.add(`${r.step_id}>${next}`);
+          const ts = r.client_ts ?? r.server_ts;
+          const prev = s.transitions.get(r.step_id);
+          if (next && (!prev || ts > prev.ts)) s.transitions.set(r.step_id, { next, ts });
         }
         break;
       case 'back_clicked':
@@ -200,10 +206,11 @@ export function computeAnalytics(db: DB, f: Filters) {
     };
   });
 
+  // A/B is only meaningful inside one version: variants differ between versions (steps, copy, experiment id).
   let abTest = null;
   const a = variants.find((v) => v.variant === 'A');
   const b = variants.find((v) => v.variant === 'B');
-  if (a && b) {
+  if (a && b && f.version) {
     abTest = {
       metric: 'cta_clicked sessions / started sessions',
       a: a.ctaPerStart,
@@ -249,11 +256,10 @@ function stepFunnel(db: DB, funnelId: string, version: number, variant: string, 
     const drop = dropAt.get(id) ?? 0;
     // Conversion between steps, split by branch: share of sessions that saw this step and moved on to each next step.
     const nextCounts = new Map<string, number>();
-    for (const s of started)
-      for (const t of s.transitions) {
-        const [from, to] = t.split('>');
-        if (from === id) nextCounts.set(to, (nextCounts.get(to) ?? 0) + 1);
-      }
+    for (const s of started) {
+      const to = s.transitions.get(id)?.next;
+      if (to) nextCounts.set(to, (nextCounts.get(to) ?? 0) + 1);
+    }
     const next = [...nextCounts]
       .sort((a, b) => b[1] - a[1])
       .map(([stepId, sessions]) => ({ stepId, sessions, rate: ratio(sessions, viewed) }));

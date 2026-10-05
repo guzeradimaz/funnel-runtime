@@ -240,4 +240,31 @@ describe('zTest', () => {
       { stepId: 'async_maturity', sessions: 1, rate: 1 / 3 },
     ]);
   });
+
+  it('counts a session in one branch only when it came back and switched branches', () => {
+    const db = setupDb([1]);
+    const s = createSession(db, { funnelId: FUNNEL_ID, variantOverride: 'A' }).sessionId;
+    db.prepare("UPDATE sessions SET variant_source = 'hash' WHERE id = ?").run(s);
+    const ev = (name: string, step: string, props: Record<string, string>, ts: string) =>
+      ({ event_id: eid(), session_id: s, name, step_id: step, client_ts: ts, properties: props });
+    // First went to office_days, came back, switched to remote -> async_maturity. Delivered newest first.
+    ingestEvents(db, [
+      ev('step_completed', 'timezone_span', { next_step_id: 'async_maturity' }, '2026-10-05T10:05:00Z'),
+      ev('step_viewed', 'timezone_span', {}, '2026-10-05T10:00:00Z'),
+      ev('step_completed', 'timezone_span', { next_step_id: 'office_days' }, '2026-10-05T10:01:00Z'),
+    ]);
+    const row = computeAnalytics(db, { funnelId: FUNNEL_ID, version: 1 })
+      .variants[0].steps!.rows.find((r) => r.stepId === 'timezone_span')!;
+    expect(row.next).toEqual([{ stepId: 'async_maturity', sessions: 1, rate: 1 }]);
+  });
+
+  it('reports the A/B test only inside one version', () => {
+    const db = setupDb([1]);
+    for (const v of ['A', 'B']) {
+      const s = createSession(db, { funnelId: FUNNEL_ID, variantOverride: v }).sessionId;
+      db.prepare("UPDATE sessions SET variant_source = 'hash' WHERE id = ?").run(s);
+    }
+    expect(computeAnalytics(db, { funnelId: FUNNEL_ID, version: 1 }).abTest).not.toBeNull();
+    expect(computeAnalytics(db, { funnelId: FUNNEL_ID }).abTest).toBeNull();
+  });
 });

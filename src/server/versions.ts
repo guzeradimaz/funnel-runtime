@@ -139,5 +139,9 @@ export function listVersions(db: DB, funnelId: string) {
 }
 
 export function listFunnels(db: DB): string[] {
-  return db.prepare('SELECT DISTINCT funnel_id FROM funnel_versions ORDER BY funnel_id').pluck().all() as string[];
+  // Oldest funnel first: uploading another funnel never changes which one "/" serves by default.
+  return db
+    .prepare('SELECT funnel_id FROM funnel_versions GROUP BY funnel_id ORDER BY MIN(created_at), funnel_id')
+    .pluck()
+    .all() as string[];
 }

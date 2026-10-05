@@ -85,7 +85,8 @@ export class Tracker {
         signal: ctrl.signal,
         keepalive: true,
       }).finally(() => clearTimeout(t));
-      if (res.status >= 500) throw new Error(`HTTP ${res.status}`);
+      // 5xx, 408 (timeout) and 429 (rate limit) are transient: keep the batch and retry with the same event_ids.
+      if (res.status >= 500 || res.status === 408 || res.status === 429) throw new Error(`HTTP ${res.status}`);
       // Accepted, duplicate and rejected are all final: a rejected event will not become valid on retry.
       const done = new Set(batch.map((e) => e.event_id));
       if (res.ok) {

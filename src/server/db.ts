@@ -78,6 +78,17 @@ const MIGRATIONS: { id: number; sql: string }[] = [
       CREATE INDEX events_campaign ON events (utm_campaign);
     `,
   },
+  {
+    // Every event row carries the full UTM set (TASK 4.1). Existing rows are backfilled from their session.
+    id: 2,
+    sql: `
+      ALTER TABLE events ADD COLUMN utm_content TEXT;
+      ALTER TABLE events ADD COLUMN utm_term TEXT;
+      UPDATE events SET
+        utm_content = (SELECT utm_content FROM sessions s WHERE s.id = events.session_id),
+        utm_term    = (SELECT utm_term    FROM sessions s WHERE s.id = events.session_id);
+    `,
+  },
 ];
 
 export function openDb(file = process.env.DB_PATH ?? path.resolve('data/funnel.db')): DB {
@@ -90,11 +101,12 @@ export function openDb(file = process.env.DB_PATH ?? path.resolve('data/funnel.d
   return db;
 }
 
-export function migrate(db: DB) {
+/** Applies pending migrations in order. `upTo` exists for tests that simulate an older database. */
+export function migrate(db: DB, upTo = Infinity) {
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (id INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
   const applied = new Set(db.prepare('SELECT id FROM schema_migrations').pluck().all() as number[]);
   for (const m of MIGRATIONS) {
-    if (applied.has(m.id)) continue;
+    if (applied.has(m.id) || m.id > upTo) continue;
     db.transaction(() => {
       db.exec(m.sql);
       db.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)').run(m.id, new Date().toISOString());
