@@ -7,6 +7,7 @@ export default defineConfig({
   build: { outDir: '../../dist', emptyOutDir: true },
   server: {
     port: 5173,
-    proxy: { '/api': 'http://localhost:3000' },
+    // Trailing slash matters: a bare '/api' prefix would also proxy the frontend module /api.ts.
+    proxy: { '/api/': 'http://localhost:3000' },
   },
 });
