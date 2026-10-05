@@ -2,6 +2,8 @@
 
 Мини-платформа для многошаговых веб-воронок. Экраны приходят с сервера как JSON-конфиг. Есть версии с публикацией и откатом, A/B-эксперимент внутри версии, собственный приём событий и аналитика по уникальным сессиям.
 
+**Публичный URL: https://funnel.guzerchuk.site** — воронка, [/admin](https://funnel.guzerchuk.site/admin), [/dashboard](https://funnel.guzerchuk.site/dashboard). Внутренние страницы на демо-стенде открыты без токена, чтобы проверяющим было удобно.
+
 Текст задания лежит в [TASK.md](TASK.md). Репозиторий: https://github.com/guzeradimaz/funnel-runtime
 
 | Страница | Путь |
@@ -69,7 +71,15 @@ npm run typecheck
 
 ## Публичный URL
 
-Сервис — один контейнер без внешних зависимостей. Состояние хранится в SQLite на диске.
+Развёрнуто на https://funnel.guzerchuk.site (VPS, Ubuntu 24.04):
+- системный пользователь `funnel`, код в `/opt/funnel-runtime/app` (клон этого репозитория), база в `/opt/funnel-runtime/data`;
+- systemd-сервис `funnel-runtime` (`HOST=127.0.0.1`, `PORT=3420`, автоперезапуск);
+- nginx как reverse proxy, сертификат Let's Encrypt через certbot, редирект с http на https;
+- `ADMIN_TOKEN` не задан: на демо-стенде `/admin` и `/dashboard` открыты всем. Это сознательное допущение для проверки задания. Любой посетитель может публиковать и откатывать версии; для боевого использования токен нужно вернуть в `/etc/funnel-runtime.env`.
+
+На этом стенде прогнаны `npm run demo` (обе итерации, публикация и откат), `npm run traffic` и браузерные сценарии. Обновление: `git pull && npm ci && npm run build` в `/opt/funnel-runtime/app` от пользователя `funnel`, затем `systemctl restart funnel-runtime`.
+
+Другие варианты запуска. Сервис — один контейнер без внешних зависимостей. Состояние хранится в SQLite на диске.
 
 - **Render:** `render.yaml` в корне. Нужен Blueprint из репозитория; он создаёт web service и диск под `/app/data`, `ADMIN_TOKEN` генерируется автоматически.
 - **Любой Docker-хост:** `docker build -t funnel . && docker run -p 3000:3000 -v funnel-data:/app/data -e ADMIN_TOKEN=secret funnel`. Образ локально не собирался (на машине разработки не было Docker); `npm ci && npm run build && npm start` проверены на чистом клоне.
