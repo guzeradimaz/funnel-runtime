@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: funnel-runtime
+    runtime: docker
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: ADMIN_TOKEN
+        generateValue: true
+    disk:
+      name: data
+      mountPath: /app/data
+      sizeGB: 1
