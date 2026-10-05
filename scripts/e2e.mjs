@@ -55,9 +55,9 @@ async function answer(branchy) {
 const url = (q = '') => `${BASE}/${q}`;
 
 // 1. Fresh session, validation, branch, progress.
-await page.goto(url('?variant=A&utm_source=e2e&utm_campaign=e2e_check'), { waitUntil: 'networkidle0' });
+await page.goto(url('?variant=A'), { waitUntil: 'networkidle0' });
 await page.evaluate(() => localStorage.clear());
-await page.goto(url('?variant=A&utm_source=e2e&utm_campaign=e2e_check'), { waitUntil: 'networkidle0' });
+await page.goto(url('?variant=A'), { waitUntil: 'networkidle0' });
 check('first screen renders from config', (await stepType()) === 'info', await title());
 await submit();
 let sawValidation = false;
